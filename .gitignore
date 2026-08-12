@@ -1,0 +1,12 @@
+/.claude/commands/prodready*
+/.claude/settings.local.json
+.idea
+/.prodready
+/.venv
+
+# Python build artifacts
+*.egg-info/
+*.egg
+build/
+dist/
+__pycache__/

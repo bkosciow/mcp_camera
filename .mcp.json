@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "camera": {
+      "command": "/home/kosci/services/camera_mcp/.venv/bin/camera-mcp-mcp",
+      "args": [],
+      "env": {
+        "CAMERA_API_URL": "http://localhost:8579"
+      }
+    }
+  }
+}

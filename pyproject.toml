@@ -1,0 +1,48 @@
+[project]
+name = "camera-mcp"
+version = "0.1.0"
+description = "USB camera snapshot service"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0,<1.0",
+    "uvicorn>=0.34.0,<1.0",
+    "opencv-python-headless>=4.10.0,<5.0",
+    "pydantic>=2.0,<3.0",
+    "pydantic-settings>=2.15.0",
+    "mcp>=1.0.0,<2.0",
+    "httpx>=0.28.0,<1.0",
+]
+
+[project.scripts]
+camera-mcp-mcp = "camera_mcp.mcp_server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0,<9.0",
+    "pytest-asyncio>=0.24.0,<1.0",
+    "httpx>=0.28.0,<1.0",
+    "ruff>=0.8.0,<1.0",
+    "mypy>=1.14.0,<2.0",
+    "pytest-cov>=5.0,<6.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+
+[tool.uv]
+package = true
+
+[tool.uv.sources]
+camera-mcp = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
