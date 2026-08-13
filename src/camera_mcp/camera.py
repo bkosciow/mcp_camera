@@ -12,50 +12,28 @@ class CameraError(Exception):
     """Raised when camera capture fails."""
 
 
-class CameraManager:
-    """Manages USB camera detection, capture, and reconnection.
+class SingleCamera:
+    """Manages a single USB camera handle.
 
-    Uses lazy initialization — no camera is required at import or construction time.
+    Handles detection, capture, auto-reconnection, and resolution probing
+    for one camera device.
     """
 
-    _instance: "CameraManager | None" = None
-
-    def __new__(cls) -> "CameraManager":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self) -> None:
-        if getattr(self, "_initialized", False):
-            return
-        self._initialized = True
+    def __init__(self, device: int | str) -> None:
+        self._device = device
         self._handle: cv2.VideoCapture | None = None
-        self._camera_device: int | str | None = None
         self._connected: bool = False
         self._last_error: str | None = None
 
-    @classmethod
-    def reset(cls) -> None:
-        """Reset singleton state. Intended for testing only."""
-        if cls._instance is not None:
-            if cls._instance._handle is not None:
-                cls._instance._handle.release()
-            cls._instance._handle = None
-            cls._instance._camera_device = None
-            cls._instance._connected = False
-            cls._instance._last_error = None
-        cls._instance = None
+    @property
+    def device(self) -> int | str | None:
+        """The camera device index or path."""
+        return self._device
 
     @property
     def connected(self) -> bool:
-        """Whether a camera was successfully detected."""
+        """Whether this camera is currently connected."""
         return self._connected
-
-    @property
-    def camera_device(self) -> int | str | None:
-        """The detected camera device index or path."""
-        return self._camera_device
 
     @property
     def last_error(self) -> str | None:
@@ -78,43 +56,23 @@ class CameraManager:
             handle.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             handle.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-    def detect(self) -> bool:
-        """Scan for available cameras and connect to the first one found.
-
-        Checks /dev/video* devices first, then falls back to indices 0-5.
+    def open(self) -> bool:
+        """Try to open this camera device.
 
         Returns:
-            True if a camera was found and opened, False otherwise.
+            True if the camera was successfully opened.
         """
-        # Try /dev/video* devices first
-        video_devices = sorted(Path("/dev").glob("video*")) if Path("/dev").exists() else []
-        for device in video_devices:
-            handle = cv2.VideoCapture(str(device))
-            if handle.isOpened():
-                self._configure_handle(handle)
-                self._handle = handle
-                self._camera_device = str(device)
-                self._connected = True
-                self._last_error = None
-                logger.info("Camera detected: %s", device)
-                return True
-
-        # Fallback: try indices 0-5
-        for index in range(6):
-            handle = cv2.VideoCapture(index)
-            if handle.isOpened():
-                self._configure_handle(handle)
-                self._handle = handle
-                self._camera_device = index
-                self._connected = True
-                self._last_error = None
-                logger.info("Camera detected at index %d", index)
-                return True
+        handle = cv2.VideoCapture(self._device)
+        if handle.isOpened():
+            self._configure_handle(handle)
+            self._handle = handle
+            self._connected = True
+            self._last_error = None
+            logger.info("Camera opened: %s", self._device)
+            return True
 
         self._connected = False
-        self._camera_device = None
-        self._last_error = "No camera found"
-        logger.warning("No camera detected")
+        self._last_error = f"Failed to open camera: {self._device}"
         return False
 
     def capture(self, max_width: int = 1280) -> bytes:
@@ -131,48 +89,21 @@ class CameraManager:
         Raises:
             CameraError: If no camera is available.
         """
-        # Reconnect if we have a known device but handle is invalid
-        if self._camera_device is not None and not self._handle_valid():
-            try:
-                handle = cv2.VideoCapture(self._camera_device)
-                if handle.isOpened():
-                    self._configure_handle(handle)
-                    self._handle = handle
-                    self._connected = True
-                    self._last_error = None
-                    logger.info("Camera reconnected: %s", self._camera_device)
-                else:
-                    raise ValueError("Reconnection failed")
-            except Exception as exc:
-                self._connected = False
-                self._last_error = str(exc)
-                logger.warning("Camera reconnection failed: %s", exc)
-
-        # Try detection if no known device
-        if self._camera_device is None and not self.detect():
-            self._last_error = "No camera available"
-            raise CameraError("No camera available")
-
-        if not self._connected:
-            self._last_error = "Camera not connected"
-            raise CameraError("Camera not connected")
+        # Reconnect if handle is invalid
+        if not self._handle_valid():
+            if not self.open():
+                self._last_error = "Camera not connected"
+                raise CameraError(self._last_error)
 
         try:
             # Ensure we get the freshest frame — discard stale buffered frames
-            if self._handle_valid():
+            if self._handle is not None and self._handle.isOpened():
                 for _ in range(3):
                     self._handle.grab()
 
             if not self._handle_valid():
-                if self._camera_device is not None:
-                    new_handle = cv2.VideoCapture(self._camera_device)
-                    if new_handle.isOpened():
-                        self._configure_handle(new_handle)
-                        self._handle = new_handle
-                    else:
-                        raise ValueError("Failed to open camera")
-                else:
-                    raise ValueError("No camera device specified")
+                if not self.open():
+                    raise CameraError("Camera not connected")
 
             assert self._handle is not None
             success, frame = self._handle.read()
@@ -196,7 +127,7 @@ class CameraManager:
             if self._handle is not None:
                 self._handle.release()
                 self._handle = None
-            logger.error("Capture failed: %s", exc)
+            logger.error("Capture failed on %s: %s", self._device, exc)
             raise CameraError(str(exc)) from exc
 
     def release(self) -> None:
@@ -204,10 +135,11 @@ class CameraManager:
         if self._handle is not None:
             self._handle.release()
             self._handle = None
+            self._connected = False
 
     def current_resolution(self) -> tuple[int, int]:
         """Return the camera's native (WxH) resolution."""
-        if not self._handle_valid():
+        if self._handle is None or not self._handle.isOpened():
             return (0, 0)
         width = self._handle.get(cv2.CAP_PROP_FRAME_WIDTH)
         height = self._handle.get(cv2.CAP_PROP_FRAME_HEIGHT)
@@ -231,7 +163,7 @@ class CameraManager:
         Tries each standard resolution, checks if the camera accepted it,
         then restores the original resolution.
         """
-        if not self._handle_valid():
+        if self._handle is None or not self._handle.isOpened():
             return []
 
         orig_w = self._handle.get(cv2.CAP_PROP_FRAME_WIDTH)
@@ -250,3 +182,150 @@ class CameraManager:
         self._handle.set(cv2.CAP_PROP_FRAME_WIDTH, orig_w)
         self._handle.set(cv2.CAP_PROP_FRAME_HEIGHT, orig_h)
         return supported
+
+
+class CameraManager:
+    """Manages multiple USB cameras.
+
+    Scans for available cameras and provides indexed access.
+    Uses lazy initialization — no camera is required at construction time.
+    """
+
+    _instance: "CameraManager | None" = None
+
+    def __new__(cls) -> "CameraManager":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self) -> None:
+        if getattr(self, "_initialized", False):
+            return
+        self._initialized = True
+        self._cameras: list[SingleCamera] = []
+
+    @classmethod
+    def reset(cls) -> None:
+        """Reset singleton state. Intended for testing only."""
+        if cls._instance is not None:
+            for camera in cls._instance._cameras:
+                camera.release()
+            cls._instance._cameras = []
+        cls._instance = None
+
+    def detect(self) -> int:
+        """Scan for available cameras and open all found.
+
+        Checks /dev/video* devices first, then falls back to indices 0-5.
+
+        Returns:
+            The number of cameras detected.
+        """
+        self._cameras = []
+        found_devices: list[int | str] = []
+
+        # Try /dev/video* devices first
+        if Path("/dev").exists():
+            video_devices = sorted(Path("/dev").glob("video*"))
+            for video_path in video_devices:
+                handle = cv2.VideoCapture(str(video_path))
+                if handle.isOpened():
+                    handle.release()
+                    found_devices.append(str(video_path))
+
+        # Fallback: try indices 0-5 (only if no /dev/video* found)
+        if not found_devices:
+            for index in range(6):
+                handle = cv2.VideoCapture(index)
+                if handle.isOpened():
+                    handle.release()
+                    found_devices.append(index)
+
+        # Create SingleCamera instances for each found device
+        for dev in found_devices:
+            camera = SingleCamera(dev)
+            if camera.open():
+                self._cameras.append(camera)
+
+        logger.info("Detected %d camera(s)", len(self._cameras))
+        return len(self._cameras)
+
+    @property
+    def count(self) -> int:
+        """Number of detected cameras."""
+        return len(self._cameras)
+
+    @property
+    def connected(self) -> bool:
+        """Whether at least one camera is connected."""
+        return len(self._cameras) > 0
+
+    @property
+    def camera_device(self) -> int | str | None:
+        """Device of the first camera (backwards compatibility)."""
+        return self._cameras[0].device if self._cameras else None
+
+    @property
+    def last_error(self) -> str | None:
+        """Last error from the first camera (backwards compatibility)."""
+        return self._cameras[0].last_error if self._cameras else None
+
+    def __getitem__(self, index: int) -> SingleCamera:
+        """Get a camera by index.
+
+        Args:
+            index: Camera index (0-based).
+
+        Returns:
+            The SingleCamera at the given index.
+
+        Raises:
+            IndexError: If index is out of range.
+        """
+        return self._cameras[index]
+
+    def get(self, index: int = 0) -> SingleCamera | None:
+        """Get a camera by index, or None if out of range.
+
+        Args:
+            index: Camera index (0-based, defaults to 0).
+
+        Returns:
+            The SingleCamera at the given index, or None.
+        """
+        try:
+            return self._cameras[index]
+        except IndexError:
+            return None
+
+    def release(self) -> None:
+        """Release all camera handles."""
+        for camera in self._cameras:
+            camera.release()
+        self._cameras = []
+
+    @property
+    def cameras(self) -> list[SingleCamera]:
+        """Get the list of detected cameras."""
+        return list(self._cameras)
+
+    # -- Backwards-compatible proxies to the first camera --
+
+    def capture(self, max_width: int = 1280) -> bytes:
+        """Capture from the first camera (backwards compatibility)."""
+        if not self._cameras:
+            raise CameraError("No camera available")
+        return self._cameras[0].capture(max_width=max_width)
+
+    def current_resolution(self) -> tuple[int, int]:
+        """Current resolution of the first camera (backwards compatibility)."""
+        if not self._cameras:
+            return (0, 0)
+        return self._cameras[0].current_resolution()
+
+    def available_resolutions(self) -> list[tuple[int, int]]:
+        """Available resolutions of the first camera (backwards compatibility)."""
+        if not self._cameras:
+            return []
+        return self._cameras[0].available_resolutions()

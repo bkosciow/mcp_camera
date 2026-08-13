@@ -30,8 +30,9 @@ class TestCaptureImageTool:
 
     def test_capture_returns_jpeg_image(self):
         """AC: capture_image returns an Image with JPEG data on 200 response."""
-        from camera_mcp.mcp_server import capture_image
         from mcp.server.fastmcp import Image
+
+        from camera_mcp.mcp_server import capture_image
 
         jpeg_bytes = b"\xff\xd8\xff\xe0test-jpeg-data"
         mock_response = MagicMock()
@@ -83,7 +84,8 @@ class TestCameraStatusTool:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "status": "ok",
-            "camera": {"connected": True, "device": "/dev/video0"},
+            "cameras": [{"index": 0, "connected": True, "device": "/dev/video0"}],
+            "camera_count": 1,
             "uptime_seconds": 100.0,
             "last_error": None,
         }
@@ -95,14 +97,15 @@ class TestCameraStatusTool:
         assert "/dev/video0" in result
 
     def test_status_returns_offline_when_disconnected(self):
-        """AC: camera_status returns OFFLINE string when camera is disconnected."""
+        """AC: camera_status returns OFFLINE string when no cameras detected."""
         from camera_mcp.mcp_server import camera_status
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "status": "degraded",
-            "camera": {"connected": False, "device": None},
+            "cameras": [],
+            "camera_count": 0,
             "uptime_seconds": 50.0,
             "last_error": "No camera found",
         }
@@ -110,8 +113,32 @@ class TestCameraStatusTool:
         with patch("camera_mcp.mcp_server.httpx.get", return_value=mock_response):
             result = camera_status()
 
-        assert "OFFLINE" in result
+        assert "0 detected" in result
         assert "No camera found" in result
+
+    def test_status_handles_multiple_cameras(self):
+        """AC: camera_status lists all cameras with their status."""
+        from camera_mcp.mcp_server import camera_status
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "ok",
+            "cameras": [
+                {"index": 0, "connected": True, "device": "/dev/video0"},
+                {"index": 1, "connected": False, "device": "/dev/video1"},
+            ],
+            "camera_count": 2,
+            "uptime_seconds": 200.0,
+            "last_error": None,
+        }
+
+        with patch("camera_mcp.mcp_server.httpx.get", return_value=mock_response):
+            result = camera_status()
+
+        assert "2 detected" in result
+        assert "ONLINE" in result
+        assert "OFFLINE" in result
 
     def test_status_handles_api_unreachable(self):
         """AC: camera_status returns error message when API is unreachable."""

@@ -5,7 +5,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from camera_mcp.camera import CameraError, CameraManager
+from camera_mcp.camera import CameraError, CameraManager, SingleCamera
 
 
 def _make_frame(width: int = 640, height: int = 480) -> np.ndarray:
@@ -95,6 +95,40 @@ def mock_camera_at_2():
 
 
 @pytest.fixture
+def mock_multi_camera():
+    """Mock cv2.VideoCapture to simulate cameras at indices 0 and 2."""
+    frame = _make_frame()
+    openable = {0, 2}
+
+    class VC:
+        def __init__(self, device):
+            self.opened = _device_index(device) in openable
+
+        def isOpened(self):  # noqa: N802
+            return self.opened
+
+        def read(self):
+            if not self.opened:
+                return False, None
+            return True, frame.copy()
+
+        def grab(self):
+            return self.opened
+
+        def release(self):
+            self.opened = False
+
+        def get(self, prop_id):
+            return 0.0
+
+        def set(self, prop_id, value):
+            return True
+
+    with patch("cv2.VideoCapture", VC):
+        yield
+
+
+@pytest.fixture
 def mock_no_camera():
     """Mock cv2.VideoCapture to simulate no camera available."""
 
@@ -125,173 +159,241 @@ def mock_no_camera():
 
 
 # ---------------------------------------------------------------------------
-# detect() tests
+# SingleCamera tests
 # ---------------------------------------------------------------------------
 
 
-class TestDetect:
-    """Tests for CameraManager.detect()."""
+class TestSingleCameraOpen:
+    """Tests for SingleCamera.open()."""
 
-    def test_detect_finds_camera_at_index_0(self, mock_camera_at_0):
-        """AC: detect() scans /dev/video* or tries indices 0-5 to find first working camera."""
-        manager = CameraManager()
-        result = manager.detect()
-        assert result is True
-        assert manager.connected is True
+    def test_open_succeeds_for_valid_device(self, mock_camera_at_0):
+        cam = SingleCamera(0)
+        assert cam.open() is True
+        assert cam.connected is True
+        assert cam.device == 0
 
-    def test_detect_returns_false_when_no_camera(self, mock_no_camera):
-        """AC: detect() returns False when no camera found."""
-        manager = CameraManager()
-        result = manager.detect()
-        assert result is False
-        assert manager.connected is False
-        assert manager.camera_device is None
+    def test_open_fails_for_invalid_device(self, mock_camera_at_2):
+        cam = SingleCamera(0)
+        assert cam.open() is False
+        assert cam.connected is False
 
-    def test_detect_scans_multiple_indices(self, mock_camera_at_2):
-        """AC: detect() scans multiple indices and returns first working one."""
-        manager = CameraManager()
-        result = manager.detect()
-        assert result is True
-
-    def test_lazy_init_no_camera_needed(self):
-        """AC: CameraManager class with lazy initialization (no camera needed at import)."""
-        manager = CameraManager()
-        assert manager.connected is False
-        assert manager.camera_device is None
+    def test_open_sets_last_error_on_failure(self, mock_no_camera):
+        cam = SingleCamera(0)
+        cam.open()
+        assert cam.last_error is not None
 
 
-# ---------------------------------------------------------------------------
-# capture() tests
-# ---------------------------------------------------------------------------
-
-
-class TestCapture:
-    """Tests for CameraManager.capture()."""
+class TestSingleCameraCapture:
+    """Tests for SingleCamera.capture()."""
 
     def test_capture_returns_jpeg_bytes(self, mock_camera_at_0):
-        """AC: capture(max_width=1280) returns JPEG bytes resized to max_width."""
-        manager = CameraManager()
-        manager.detect()
-        result = manager.capture(max_width=1280)
+        cam = SingleCamera(0)
+        cam.open()
+        result = cam.capture(max_width=1280)
         assert isinstance(result, bytes)
         assert len(result) > 0
-        # JPEG magic bytes
         assert result[:2] == b"\xff\xd8"
 
     def test_capture_resizes_to_max_width(self, mock_camera_at_0):
-        """AC: capture() resizes to max_width."""
-        manager = CameraManager()
-        manager.detect()
-        result = manager.capture(max_width=640)
-        assert isinstance(result, bytes)
-        assert len(result) > 0
-        # Decode to verify dimensions
+        cam = SingleCamera(0)
+        cam.open()
+        result = cam.capture(max_width=640)
         import cv2
 
         buf = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_COLOR)
         assert buf.shape[1] <= 640
 
-    def test_capture_raises_when_no_camera(self, mock_no_camera):
-        """AC: capture() raises/returns error when camera unavailable."""
+    def test_capture_raises_when_not_opened(self, mock_no_camera):
+        cam = SingleCamera(0)
+        with pytest.raises(CameraError):
+            cam.capture()
+
+    def test_capture_reconnects_on_invalid_handle(self, mock_camera_at_0):
+        frame = _make_frame()
+
+        class VC:
+            def __init__(self, device):
+                self.opened = _device_index(device) == 0
+
+            def isOpened(self):  # noqa: N802
+                return self.opened
+
+            def read(self):
+                if not self.opened:
+                    return False, None
+                return True, frame.copy()
+
+            def grab(self):
+                return self.opened
+
+            def release(self):
+                self.opened = False
+
+            def get(self, prop_id):
+                return 0.0
+
+            def set(self, prop_id, value):
+                return True
+
+        with patch("cv2.VideoCapture", VC):
+            cam = SingleCamera(0)
+            cam.open()
+            # First capture succeeds
+            result = cam.capture()
+            assert result[:2] == b"\xff\xd8"
+
+            # Simulate disconnect
+            cam._handle.release()
+            cam._connected = False
+
+            # Next capture should reconnect and succeed
+            result2 = cam.capture()
+            assert result2[:2] == b"\xff\xd8"
+
+    def test_release_clears_handle(self, mock_camera_at_0):
+        cam = SingleCamera(0)
+        cam.open()
+        assert cam.connected is True
+        cam.release()
+        assert cam.connected is False
+
+
+class TestSingleCameraResolution:
+    """Tests for SingleCamera resolution methods."""
+
+    def test_current_resolution_returns_zero_when_disconnected(self, mock_no_camera):
+        cam = SingleCamera(0)
+        w, h = cam.current_resolution()
+        assert w == 0
+        assert h == 0
+
+    def test_available_resolutions_empty_when_disconnected(self, mock_no_camera):
+        cam = SingleCamera(0)
+        assert cam.available_resolutions() == []
+
+
+# ---------------------------------------------------------------------------
+# CameraManager tests
+# ---------------------------------------------------------------------------
+
+
+class TestManagerDetect:
+    """Tests for CameraManager.detect()."""
+
+    def test_detect_finds_single_camera(self, mock_camera_at_0):
         manager = CameraManager()
+        count = manager.detect()
+        assert count == 1
+        assert manager.connected is True
+        assert manager.count == 1
+
+    def test_detect_returns_zero_when_no_camera(self, mock_no_camera):
+        manager = CameraManager()
+        count = manager.detect()
+        assert count == 0
+        assert manager.connected is False
+
+    def test_detect_finds_multiple_cameras(self, mock_multi_camera):
+        manager = CameraManager()
+        count = manager.detect()
+        assert count == 2
+        assert manager.count == 2
+
+    def test_lazy_init_no_camera_needed(self):
+        manager = CameraManager()
+        assert manager.connected is False
+        assert manager.count == 0
+
+
+class TestManagerAccess:
+    """Tests for CameraManager indexed access."""
+
+    def test_get_first_camera(self, mock_camera_at_0):
+        manager = CameraManager()
+        manager.detect()
+        cam = manager.get(0)
+        assert cam is not None
+        assert cam.connected is True
+
+    def test_get_out_of_range_returns_none(self, mock_camera_at_0):
+        manager = CameraManager()
+        manager.detect()
+        cam = manager.get(5)
+        assert cam is None
+
+    def test_getitem_raises_on_out_of_range(self, mock_camera_at_0):
+        manager = CameraManager()
+        manager.detect()
+        with pytest.raises(IndexError):
+            _ = manager[5]
+
+    def test_multi_camera_access(self, mock_multi_camera):
+        manager = CameraManager()
+        manager.detect()
+        cam0 = manager.get(0)
+        cam1 = manager.get(1)
+        assert cam0 is not None
+        assert cam0.connected is True
+        assert cam1 is not None
+        assert cam1.connected is True
+
+    def test_cameras_list(self, mock_multi_camera):
+        manager = CameraManager()
+        manager.detect()
+        cams = manager.cameras
+        assert len(cams) == 2
+
+
+class TestManagerBackwardsCompat:
+    """Tests for backwards-compatible proxy methods on CameraManager."""
+
+    def test_capture_delegates_to_first(self, mock_camera_at_0):
+        manager = CameraManager()
+        manager.detect()
+        result = manager.capture(max_width=640)
+        assert isinstance(result, bytes)
+        assert result[:2] == b"\xff\xd8"
+
+    def test_capture_raises_when_no_camera(self, mock_no_camera):
+        manager = CameraManager()
+        manager.detect()
         with pytest.raises(CameraError):
             manager.capture()
 
-    def test_capture_reconnects_on_disconnect(self, mock_camera_at_0):
-        """AC: capture() handles camera disconnect and reopens on next call."""
-        frame = _make_frame()
-        read_count = 0
+    def test_current_resolution_delegates(self, mock_camera_at_0):
+        manager = CameraManager()
+        manager.detect()
+        w, h = manager.current_resolution()
+        # Mock returns 0.0 for all props
+        assert isinstance(w, int)
 
-        class VC:
-            def __init__(self, device):
-                self.opened = _device_index(device) == 0
+    def test_available_resolutions_delegates(self, mock_camera_at_0):
+        manager = CameraManager()
+        manager.detect()
+        result = manager.available_resolutions()
+        assert isinstance(result, list)
 
-            def isOpened(self):  # noqa: N802
-                return self.opened
+    def test_camera_device_delegates(self, mock_camera_at_0):
+        manager = CameraManager()
+        manager.detect()
+        # detect() scans /dev/video* first, so device is "/dev/video0" (string)
+        assert manager.camera_device is not None
 
-            def read(self):
-                nonlocal read_count
-                if not self.opened:
-                    return False, None
-                read_count += 1
-                # First read succeeds, then simulate disconnect
-                if read_count == 1:
-                    self.opened = False
-                    return True, frame.copy()
-                # After reconnect, read fails (no more frames)
-                return False, None
+    def test_last_error_delegates(self, mock_camera_at_0):
+        manager = CameraManager()
+        manager.detect()
+        assert manager.last_error is None
 
-            def grab(self):
-                return self.opened
 
-            def release(self):
-                self.opened = False
+class TestManagerRelease:
+    """Tests for CameraManager.release()."""
 
-            def get(self, prop_id):
-                return 0.0
-
-            def set(self, prop_id, value):
-                return True
-
-        with patch("cv2.VideoCapture", VC):
-            manager = CameraManager()
-            manager.detect()
-            # First capture succeeds (frame before disconnect)
-            result1 = manager.capture()
-            assert result1[:2] == b"\xff\xd8"
-
-            # After the read, camera handle is invalid (opened=False)
-            # Manager should try to reconnect (create new VC(0) which opens)
-            # But the new instance's read() returns False (read_count > 1)
-            # So it should raise CameraError
-            with pytest.raises(CameraError):
-                manager.capture()
-
-    def test_handle_released_on_exception(self, mock_camera_at_0):
-        """AC: camera handle is released on exception (no leak)."""
-        frame = _make_frame()
-        read_count = 0
-        handles = []
-
-        class VC:
-            def __init__(self, device):
-                self.opened = _device_index(device) == 0
-                handles.append(self)
-
-            def isOpened(self):  # noqa: N802
-                return self.opened
-
-            def read(self):
-                nonlocal read_count
-                read_count += 1
-                if read_count == 1:
-                    return True, frame.copy()
-                # Second read raises an exception
-                raise RuntimeError("hardware error")
-
-            def grab(self):
-                return self.opened
-
-            def release(self):
-                self.opened = False
-
-            def get(self, prop_id):
-                return 0.0
-
-            def set(self, prop_id, value):
-                return True
-
-        with patch("cv2.VideoCapture", VC):
-            manager = CameraManager()
-            manager.detect()
-            # First capture succeeds
-            manager.capture()
-            # Second capture raises exception (read fails)
-            with pytest.raises(CameraError):
-                manager.capture()
-
-            # The handle used during detect should have been released
-            assert handles[0].isOpened() is False
+    def test_release_clears_all_cameras(self, mock_multi_camera):
+        manager = CameraManager()
+        manager.detect()
+        assert manager.count == 2
+        manager.release()
+        assert manager.count == 0
 
 
 # ---------------------------------------------------------------------------

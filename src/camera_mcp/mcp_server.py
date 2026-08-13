@@ -22,7 +22,7 @@ mcp = FastMCP(
 
 @mcp.tool()
 def capture_image(max_width: int = 1280) -> Image:
-    """Capture a fresh image from the USB camera.
+    """Capture a fresh image from the first USB camera.
 
     Every call captures a new frame — no stale caches.
 
@@ -51,17 +51,18 @@ def camera_status() -> str:
         return f"Camera API unreachable: {response.text}"
 
     data = response.json()
-    connected = data["camera"]["connected"]
-    status = "ONLINE" if connected else "OFFLINE"
-    device = data["camera"].get("device", "unknown")
+    cameras = data.get("cameras", [])
+    count = data.get("camera_count", 0)
     uptime = data.get("uptime_seconds", 0)
     error = data.get("last_error")
 
-    lines = [
-        f"Camera: {status}",
-        f"Device: {device}",
-        f"Uptime: {uptime:.0f}s",
-    ]
+    lines = [f"Cameras: {count} detected"]
+    for cam in cameras:
+        status = "ONLINE" if cam["connected"] else "OFFLINE"
+        device = cam.get("device", "unknown")
+        lines.append(f"  [{cam['index']}] {status} — {device}")
+
+    lines.append(f"Uptime: {uptime:.0f}s")
     if error:
         lines.append(f"Last error: {error}")
 
