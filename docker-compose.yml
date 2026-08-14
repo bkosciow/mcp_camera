@@ -2,10 +2,10 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile
-      target: builder
+      dockerfile: .docker/Dockerfile
     ports:
       - "8579:8579"
+      - "8580:8580"
     volumes:
       - .:/app
       - /app/.venv

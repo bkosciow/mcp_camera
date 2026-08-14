@@ -43,6 +43,8 @@ Model Context Protocol server exposing two tools for Claude Code:
 
 The MCP server connects to the camera API via HTTP (configured via `CAMERA_API_URL` env var, defaults to `http://localhost:8579`). It does NOT import the camera module directly — it's a thin HTTP client over the running API.
 
+By default the MCP server uses **streamable-http** transport on port 8580, making it accessible from other containers. For local dev with Claude Code subprocess, set `MCP_TRANSPORT=stdio`.
+
 ## Configuration
 
 Environment variables are read via `pydantic-settings` with prefix `CAMERA_`:
@@ -55,6 +57,14 @@ Environment variables are read via `pydantic-settings` with prefix `CAMERA_`:
 | `CAMERA_JPEG_QUALITY` | `85` | JPEG quality (1–100) |
 | `CAMERA_LOG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
 | `CAMERA_API_URL` | `http://localhost:8579` | Camera API URL for MCP server |
+
+MCP server transport:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_TRANSPORT` | `streamable-http` | Transport (`streamable-http` or `stdio`) |
+| `MCP_HOST` | `0.0.0.0` | MCP server listen address |
+| `MCP_PORT` | `8580` | MCP server listen port |
 
 ## Development Commands
 
@@ -79,12 +89,15 @@ uv run mypy src/
 
 ## Docker
 
+The production Dockerfile (`.docker/Dockerfile`) is a single-stage `python:3.12-slim` image that runs both the camera API server (port 8579) and the MCP server (port 8580) via `.docker/start.sh`.
+
 ```bash
-# Development with Docker
-make dev-docker    # docker compose up
+# Development with Docker (volume mount + reload)
+make dev           # docker compose up
 
 # Production build
-make prod          # docker compose -f docker-compose.prod.yml up --build
+make build-prod    # docker compose -f docker-compose.prod.yml build
+make prod-up       # docker compose -f docker-compose.prod.yml up -d
 ```
 
 Camera device is passed through via `--device /dev/video0` in Docker Compose.

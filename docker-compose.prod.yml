@@ -2,10 +2,10 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile
-      target: runner
+      dockerfile: .docker/Dockerfile
     ports:
       - "${APP_PORT:-8579}:8579"
+      - "${MCP_PORT:-8580}:8580"
     environment:
       - PYTHONUNBUFFERED=1
       - CAMERA_HOST=${CAMERA_HOST:-0.0.0.0}
@@ -13,6 +13,8 @@ services:
       - CAMERA_MAX_WIDTH=${CAMERA_MAX_WIDTH:-1280}
       - CAMERA_JPEG_QUALITY=${CAMERA_JPEG_QUALITY:-85}
       - CAMERA_LOG_LEVEL=${CAMERA_LOG_LEVEL:-INFO}
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8580
     # USB camera device passthrough
     devices:
       - "${CAMERA_DEVICE:-/dev/video0}:/dev/video0"

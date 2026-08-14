@@ -1,22 +1,31 @@
 """MCP server — exposes camera capture as tools for Claude Code.
 
-Run with:
-    uv run python -m camera_mcp.mcp_server
+Run with streamable-http (default, for Docker/deployed use):
+    uv run python -m camera_mcp.mcp_server          # → http://0.0.0.0:8580/mcp
 
-Or configure in Claude Code settings for automatic stdio transport.
+Run with stdio (for local Claude Code subprocess):
+    MCP_TRANSPORT=stdio uv run python -m camera_mcp.mcp_server
 """
 
 import os
+from typing import Literal
 
 import httpx
 from mcp.server.fastmcp import FastMCP, Image
 
 # Configuration from environment
 CAMERA_API_URL = os.environ.get("CAMERA_API_URL", "http://localhost:8579")
+MCP_TRANSPORT: Literal["stdio", "sse", "streamable-http"] = (
+    os.environ.get("MCP_TRANSPORT", "streamable-http")  # type: ignore[assignment]
+)
+MCP_HOST = os.environ.get("MCP_HOST", "0.0.0.0")
+MCP_PORT = int(os.environ.get("MCP_PORT", "8580"))
 
 mcp = FastMCP(
     "Camera MCP",
     instructions="USB camera snapshot service — capture live images and check camera status.",
+    host=MCP_HOST,
+    port=MCP_PORT,
 )
 
 
@@ -71,7 +80,7 @@ def camera_status() -> str:
 
 def main() -> None:
     """Entry point for the MCP server."""
-    mcp.run()
+    mcp.run(transport=MCP_TRANSPORT)
 
 
 if __name__ == "__main__":
