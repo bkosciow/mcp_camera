@@ -5,7 +5,7 @@ services:
       dockerfile: .docker/Dockerfile
     ports:
       - "${APP_PORT:-8579}:8579"
-      - "${MCP_PORT:-8580}:8580"
+      - "${MCP_PORT:-8580}:11001"
     environment:
       - PYTHONUNBUFFERED=1
       - CAMERA_HOST=${CAMERA_HOST:-0.0.0.0}
@@ -14,7 +14,7 @@ services:
       - CAMERA_JPEG_QUALITY=${CAMERA_JPEG_QUALITY:-85}
       - CAMERA_LOG_LEVEL=${CAMERA_LOG_LEVEL:-INFO}
       - MCP_HOST=0.0.0.0
-      - MCP_PORT=8580
+      - MCP_PORT=11001
     devices:
       - "/dev/video0:/dev/video0"
       - "/dev/video1:/dev/video1"
@@ -26,9 +26,3 @@ services:
         limits:
           cpus: "1"
           memory: 256M
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8579/health"]
-      interval: 30s
-      timeout: 5s
-      start_period: 10s
-      retries: 3
