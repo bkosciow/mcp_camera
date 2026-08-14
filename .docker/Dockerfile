@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
@@ -22,17 +22,15 @@ ENV VIRTUAL_ENV=/app/.venv \
     PYTHONPATH=/app/src
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project
+COPY src/ ./src/
+
+RUN uv sync --frozen
 
 # Create non-root user with video group for /dev/video* access
 # GID 44 matches the standard 'video' group on most Linux distros
 RUN groupadd --gid 1001 appuser && \
     groupadd -g 44 -o video 2>/dev/null || true && \
     useradd --uid 1001 --gid appuser --groups video --shell /bin/sh appuser
-
-# Copy application code and install project (entry points)
-COPY --chown=appuser:appuser src/ ./src/
-RUN uv sync --frozen
 
 COPY .docker/start.sh /app/start.sh
 RUN chmod +x /app/start.sh
