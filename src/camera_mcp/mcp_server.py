@@ -30,15 +30,18 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-def capture_image(max_width: int = 1280) -> Image:
-    """Capture a fresh image from the first USB camera.
+def capture_image(camera_index: int = 0, max_width: int = 1280) -> Image:
+    """Capture a fresh image from a USB camera.
 
     Every call captures a new frame — no stale caches.
 
     Args:
+        camera_index: Camera index (0-based). Use 0 for the first camera, 1 for the second, etc.
         max_width: Maximum image width in pixels (160-3840, default 1280).
     """
-    url = f"{CAMERA_API_URL}/capture"
+
+    url = f"{CAMERA_API_URL}/capture/{camera_index}"
+
     response = httpx.get(url, params={"max_width": max_width}, timeout=10)
 
     if response.status_code != 200:
