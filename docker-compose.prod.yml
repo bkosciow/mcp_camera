@@ -15,9 +15,11 @@ services:
       - CAMERA_LOG_LEVEL=${CAMERA_LOG_LEVEL:-INFO}
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8580
-    # USB camera device passthrough
     devices:
-      - "${CAMERA_DEVICE:-/dev/video0}:/dev/video0"
+      - "/dev/video0:/dev/video0"
+      - "/dev/video1:/dev/video1"
+      - "/dev/video2:/dev/video2"
+      - "/dev/video3:/dev/video3"
     restart: unless-stopped
     deploy:
       resources:

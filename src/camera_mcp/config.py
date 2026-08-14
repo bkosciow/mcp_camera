@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     jpeg_quality: int = Field(default=85, description="JPEG quality (1-100)")
     log_level: str = Field(default="INFO", description="Log level")
 
-    model_config = {"env_prefix": "CAMERA_", "env_file": ".env"}
+    model_config = {"env_prefix": "CAMERA_", "env_file": ".env", "extra": "ignore"}
 
 
 def get_settings() -> Settings:

@@ -24,9 +24,11 @@ ENV VIRTUAL_ENV=/app/.venv \
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
 
-# Create non-root user
+# Create non-root user with video group for /dev/video* access
+# GID 44 matches the standard 'video' group on most Linux distros
 RUN groupadd --gid 1001 appuser && \
-    useradd --uid 1001 --gid appuser --shell /bin/sh appuser
+    groupadd -g 44 -o video 2>/dev/null || true && \
+    useradd --uid 1001 --gid appuser --groups video --shell /bin/sh appuser
 
 # Copy application code and install project (entry points)
 COPY --chown=appuser:appuser src/ ./src/
