@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "camera": {
+      "command": "/absolute/path/to/camera_mcp/.venv/bin/camera-mcp-mcp",
+      "args": [],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "CAMERA_API_URL": "http://localhost:8579",
+        "CAMERA_AUTH_TOKEN": "REPLACE-WITH-TOKEN-FROM-.ENV"
+      }
+    }
+  }
+}

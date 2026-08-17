@@ -128,7 +128,7 @@ The project includes an MCP server that exposes camera tools to Claude Code. Whe
    uv run uvicorn src.camera_mcp.main:app --host 0.0.0.0 --port 8579
    ```
 
-2. Open Claude Code in this project directory — the MCP server is configured via `.mcp.json` and will be available automatically.
+2. Open Claude Code in this project directory — the MCP server is configured via `.mcp.json` and will be available automatically. If it doesn't exist, create it with `cp .mcp.json.example .mcp.json`, point `command` at your `.venv/bin/camera-mcp-mcp`, and paste your `CAMERA_AUTH_TOKEN` from `.env` (the file is gitignored — it holds a secret).
 
 3. Use natural language to interact with the camera:
    - "can you see?" → calls `camera_status`
