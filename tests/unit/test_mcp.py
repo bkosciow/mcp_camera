@@ -151,3 +151,46 @@ class TestCameraStatusTool:
             result = camera_status()
 
         assert "unreachable" in result.lower() or "error" in result.lower()
+
+
+class TestMCPAuth:
+    """The MCP server authenticates against the camera API with a bearer token."""
+
+    def test_capture_sends_auth_header(self):
+        from camera_mcp.mcp_server import capture_image
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"\xff\xd8test"
+
+        with patch("camera_mcp.mcp_server.httpx.get", return_value=mock_response) as mock_get:
+            with patch("camera_mcp.mcp_server.CAMERA_AUTH_TOKEN", "s3cret"):
+                capture_image()
+
+        assert mock_get.call_args[1]["headers"] == {"Authorization": "Bearer s3cret"}
+
+    def test_status_sends_auth_header(self):
+        from camera_mcp.mcp_server import camera_status
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "ok",
+            "cameras": [],
+            "camera_count": 0,
+            "uptime_seconds": 1.0,
+            "last_error": None,
+        }
+
+        with patch("camera_mcp.mcp_server.httpx.get", return_value=mock_response) as mock_get:
+            with patch("camera_mcp.mcp_server.CAMERA_AUTH_TOKEN", "s3cret"):
+                camera_status()
+
+        assert mock_get.call_args[1]["headers"] == {"Authorization": "Bearer s3cret"}
+
+    def test_main_exits_without_token(self):
+        from camera_mcp import mcp_server
+
+        with patch.object(mcp_server, "CAMERA_AUTH_TOKEN", ""):
+            with pytest.raises(SystemExit, match="CAMERA_AUTH_TOKEN"):
+                mcp_server.main()

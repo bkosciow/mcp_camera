@@ -5,24 +5,40 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Query
+from fastapi import Depends, FastAPI, Query
 from fastapi.responses import JSONResponse, Response
 
 from camera_mcp.camera import CameraError, CameraManager, SingleCamera
+from camera_mcp.config import Settings
+from camera_mcp.security import make_token_dependency
 
 
-def create_app(camera: CameraManager | None = None) -> FastAPI:
+def create_app(camera: CameraManager | None = None, settings: Settings | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         camera: CameraManager instance (defaults to real singleton).
+        settings: Application settings (defaults to get_settings()).
+
+    Raises:
+        RuntimeError: If ``settings.auth_token`` is unset or empty — the API
+            refuses to start without authentication (fail-closed).
     """
-    if camera is None:
+    if settings is None:
         from camera_mcp.config import configure_logging, get_settings
 
         settings = get_settings()
         configure_logging(settings.log_level)
+    if camera is None:
         camera = CameraManager()
+
+    auth_token = (settings.auth_token or "").strip()
+    if not auth_token:
+        raise RuntimeError(
+            "CAMERA_AUTH_TOKEN is not set — refusing to start without authentication. "
+            "Set it in the environment or .env file."
+        )
+    token_dependency = make_token_dependency(auth_token)
 
     start_time: float = 0.0
 
@@ -60,7 +76,7 @@ def create_app(camera: CameraManager | None = None) -> FastAPI:
                 content={"error": str(exc), "code": "CAMERA_UNAVAILABLE"},
             )
 
-    @app.get("/capture")
+    @app.get("/capture", dependencies=[Depends(token_dependency)])
     async def capture(max_width: int = Query(default=1280, ge=160, le=3840)) -> Response:
         """Capture a fresh image from the first camera.
 
@@ -69,7 +85,7 @@ def create_app(camera: CameraManager | None = None) -> FastAPI:
         """
         return _capture_response(camera.get(0), max_width)
 
-    @app.get("/capture/{cam_index}")
+    @app.get("/capture/{cam_index}", dependencies=[Depends(token_dependency)])
     async def capture_index(
         cam_index: int,
         max_width: int = Query(default=1280, ge=160, le=3840),
@@ -85,7 +101,7 @@ def create_app(camera: CameraManager | None = None) -> FastAPI:
         """
         return _capture_response(camera.get(cam_index), max_width)
 
-    @app.get("/camera")
+    @app.get("/camera", dependencies=[Depends(token_dependency)])
     async def camera_info() -> dict[str, Any]:
         """Get info for all detected cameras.
 
@@ -111,7 +127,7 @@ def create_app(camera: CameraManager | None = None) -> FastAPI:
             "cameras": cameras_list,
         }
 
-    @app.get("/camera/{cam_index}", response_model=None)
+    @app.get("/camera/{cam_index}", response_model=None, dependencies=[Depends(token_dependency)])
     async def camera_info_index(cam_index: int) -> dict[str, Any] | Response:
         """Get info for a specific camera.
 

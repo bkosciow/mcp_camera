@@ -41,6 +41,14 @@ CAMERA_LOG_LEVEL=INFO
 MCP_PORT=8580
 ```
 
+Generate a token and append it to `.env` — the app refuses to start without it:
+
+```bash
+python3 -c 'import secrets; print("CAMERA_AUTH_TOKEN=" + secrets.token_hex(32))' >> .env
+```
+
+`docker-compose.prod.yml` passes `CAMERA_AUTH_TOKEN` from `.env` into the container and fails fast if it is missing.
+
 ### Step 3: Configure Camera Device
 
 Identify the USB camera device:

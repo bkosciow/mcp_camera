@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     max_width: int = Field(default=1280, description="Default max image width (px)")
     jpeg_quality: int = Field(default=85, description="JPEG quality (1-100)")
     log_level: str = Field(default="INFO", description="Log level")
+    auth_token: str | None = Field(default=None, description="Bearer token required for API access")
 
     model_config = {"env_prefix": "CAMERA_", "env_file": ".env", "extra": "ignore"}
 

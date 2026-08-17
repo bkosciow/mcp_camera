@@ -6,6 +6,9 @@ from fastapi.testclient import TestClient
 from camera_mcp.camera import CameraError
 from camera_mcp.main import create_app
 
+# Must match the value set in tests/conftest.py.
+AUTH_HEADERS: dict[str, str] = {"Authorization": "Bearer test-token"}
+
 
 def _make_frame(width: int = 640, height: int = 480) -> np.ndarray:
     """Create a random test frame."""
@@ -142,7 +145,7 @@ class TestCaptureEndpoint:
 
     def test_capture_returns_200_with_jpeg(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/capture")
             assert response.status_code == 200
             assert response.headers["content-type"] == "image/jpeg"
@@ -151,7 +154,7 @@ class TestCaptureEndpoint:
 
     def test_capture_returns_503_when_camera_unavailable(self):
         app, _ = make_app(camera_configs=[(0, True, True)])
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/capture")
             assert response.status_code == 503
             data = response.json()
@@ -161,26 +164,26 @@ class TestCaptureEndpoint:
 
     def test_capture_respects_max_width(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/capture?max_width=640")
             assert response.status_code == 200
             assert response.headers["content-type"] == "image/jpeg"
 
     def test_capture_rejects_width_too_large(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/capture?max_width=9999")
             assert response.status_code == 422
 
     def test_capture_rejects_width_too_small(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/capture?max_width=99")
             assert response.status_code == 422
 
     def test_consecutive_captures_return_different_data(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             r1 = client.get("/capture")
             r2 = client.get("/capture")
             assert r1.status_code == 200
@@ -198,7 +201,7 @@ class TestCaptureIndexEndpoint:
 
     def test_capture_index_returns_200_for_existing_camera(self):
         app, _ = make_app(camera_configs=[(0, True, False), (1, True, False)])
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/capture/1")
             assert response.status_code == 200
             assert response.headers["content-type"] == "image/jpeg"
@@ -206,7 +209,7 @@ class TestCaptureIndexEndpoint:
 
     def test_capture_index_returns_404_for_missing_camera(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/capture/5")
             assert response.status_code == 404
             data = response.json()
@@ -214,7 +217,7 @@ class TestCaptureIndexEndpoint:
 
     def test_capture_index_respects_max_width(self):
         app, _ = make_app(camera_configs=[(0, True, False), (1, True, False)])
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/capture/1?max_width=640")
             assert response.status_code == 200
 
@@ -229,7 +232,7 @@ class TestCameraEndpoint:
 
     def test_camera_returns_all_cameras(self):
         app, _ = make_app(camera_configs=[(0, True, False), (1, True, False)])
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/camera")
             assert response.status_code == 200
             data = response.json()
@@ -242,7 +245,7 @@ class TestCameraEndpoint:
 
     def test_camera_single_camera(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/camera")
             assert response.status_code == 200
             data = response.json()
@@ -254,7 +257,7 @@ class TestCameraEndpoint:
 
     def test_camera_no_cameras(self):
         app, _ = make_app(camera_configs=[])
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/camera")
             assert response.status_code == 200
             data = response.json()
@@ -267,7 +270,7 @@ class TestCameraIndexEndpoint:
 
     def test_camera_index_returns_info(self):
         app, _ = make_app(camera_configs=[(0, True, False), (1, True, False)])
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/camera/1")
             assert response.status_code == 200
             data = response.json()
@@ -278,7 +281,7 @@ class TestCameraIndexEndpoint:
 
     def test_camera_index_returns_404(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/camera/5")
             assert response.status_code == 404
             data = response.json()
@@ -295,7 +298,7 @@ class TestHealthEndpoint:
 
     def test_health_ok_when_camera_connected(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/health")
             assert response.status_code == 200
             data = response.json()
@@ -304,7 +307,7 @@ class TestHealthEndpoint:
 
     def test_health_degraded_when_no_cameras(self):
         app, _ = make_app(camera_configs=[])
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/health")
             assert response.status_code == 200
             data = response.json()
@@ -313,7 +316,7 @@ class TestHealthEndpoint:
 
     def test_health_includes_uptime(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/health")
             data = response.json()
             assert "uptime_seconds" in data
@@ -322,7 +325,7 @@ class TestHealthEndpoint:
 
     def test_health_includes_last_error_null_when_ok(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/health")
             data = response.json()
             assert "last_error" in data
@@ -330,7 +333,7 @@ class TestHealthEndpoint:
 
     def test_health_includes_camera_list(self):
         app, _ = make_app(camera_configs=[(0, True, False), (1, True, False)])
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/health")
             data = response.json()
             assert "cameras" in data
@@ -341,7 +344,7 @@ class TestHealthEndpoint:
 
     def test_health_includes_camera_device(self):
         app, _ = make_app()
-        with TestClient(app) as client:
+        with TestClient(app, headers=AUTH_HEADERS) as client:
             response = client.get("/health")
             data = response.json()
             assert len(data["cameras"]) == 1

@@ -45,21 +45,26 @@ All tests run without hardware — `cv2.VideoCapture` is mocked.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/capture` | GET | Capture a fresh JPEG image from the USB camera |
-| `/camera` | GET | Camera info and available resolutions |
+| `/capture` | GET | Capture a fresh JPEG image from the first camera (index 0) |
+| `/capture/{cam_index}` | GET | Capture a fresh JPEG image from a specific camera |
+| `/camera` | GET | Info for all detected cameras |
+| `/camera/{cam_index}` | GET | Info for a specific camera |
 | `/health` | GET | Service health and camera status |
 
 ### Capture
 
 ```bash
-# Default (1280px max width)
-curl http://localhost:8579/capture > photo.jpg
+# Default — first camera, 1280px max width
+curl -H "Authorization: Bearer $CAMERA_AUTH_TOKEN" http://localhost:8579/capture > photo.jpg
 
 # Custom width
-curl "http://localhost:8579/capture?max_width=640" > photo.jpg
+curl -H "Authorization: Bearer $CAMERA_AUTH_TOKEN" "http://localhost:8579/capture?max_width=640" > photo.jpg
+
+# Second camera (index 1)
+curl -H "Authorization: Bearer $CAMERA_AUTH_TOKEN" http://localhost:8579/capture/1 > photo_cam2.jpg
 ```
 
-Returns `image/jpeg` on success (200) or JSON error (503) if camera is unavailable.
+Returns `image/jpeg` on success (200), `404` if the camera doesn't exist, or JSON error (`503`) if camera is unavailable.
 
 ### Health
 
@@ -70,7 +75,11 @@ curl http://localhost:8579/health
 ```json
 {
   "status": "ok",
-  "camera": { "connected": true, "device": 0 },
+  "cameras": [
+    { "index": 0, "connected": true, "device": "/dev/video0" },
+    { "index": 1, "connected": true, "device": "/dev/video1" }
+  ],
+  "camera_count": 2,
   "uptime_seconds": 1234.5,
   "last_error": null
 }
@@ -94,7 +103,8 @@ Single-container stateless service:
 - **FastAPI** for the HTTP layer
 - **OpenCV (cv2)** for camera capture and image processing
 - **No database** — each request is independent
-- Camera auto-detected on startup, auto-reconnects on disconnect
+- Supports multiple USB cameras — auto-detected on startup, indexed access via API
+- Auto-reconnects on camera disconnect
 
 ## Deployment
 
@@ -106,8 +116,8 @@ The project includes an MCP server that exposes camera tools to Claude Code. Whe
 
 ### Available Tools
 
-- **`capture_image`** — Capture a fresh JPEG image from the USB camera
-- **`camera_status`** — Check camera health and connection status
+- **`capture_image(camera_index, max_width)`** — Capture a fresh JPEG image from a USB camera. `camera_index` selects which camera (0-based, defaults to 0).
+- **`camera_status()`** — Check camera health and connection status for all detected cameras.
 
 ### Setup
 
@@ -122,8 +132,8 @@ The project includes an MCP server that exposes camera tools to Claude Code. Whe
 
 3. Use natural language to interact with the camera:
    - "can you see?" → calls `camera_status`
-   - "what do you see?" → calls `capture_image`
-   - "take a photo" → calls `capture_image`
+   - "what do you see?" → calls `capture_image()` (first camera)
+   - "take a photo with the second camera" → calls `capture_image(camera_index=1)`
 
 ### Standalone
 

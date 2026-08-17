@@ -1,4 +1,4 @@
-"""MCP server — exposes camera capture as tools for Claude Code.
+"""MCP server — exposes camera capture as tools for agents.
 
 Run with streamable-http (default, for Docker/deployed use):
     uv run python -m camera_mcp.mcp_server          # → http://0.0.0.0:8580/mcp
@@ -20,6 +20,7 @@ MCP_TRANSPORT: Literal["stdio", "sse", "streamable-http"] = (
 )
 MCP_HOST = os.environ.get("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8580"))
+CAMERA_AUTH_TOKEN = os.environ.get("CAMERA_AUTH_TOKEN", "")
 
 mcp = FastMCP(
     "Camera MCP",
@@ -27,6 +28,11 @@ mcp = FastMCP(
     host=MCP_HOST,
     port=MCP_PORT,
 )
+
+
+def _auth_headers() -> dict[str, str]:
+    """Authorization headers for camera API calls."""
+    return {"Authorization": f"Bearer {CAMERA_AUTH_TOKEN}"}
 
 
 @mcp.tool()
@@ -42,7 +48,7 @@ def capture_image(camera_index: int = 0, max_width: int = 1280) -> Image:
 
     url = f"{CAMERA_API_URL}/capture/{camera_index}"
 
-    response = httpx.get(url, params={"max_width": max_width}, timeout=10)
+    response = httpx.get(url, params={"max_width": max_width}, timeout=10, headers=_auth_headers())
 
     if response.status_code != 200:
         raise RuntimeError(f"Capture failed (HTTP {response.status_code}): {response.text}")
@@ -57,7 +63,7 @@ def camera_status() -> str:
     Returns camera connectivity, device info, uptime, and any recent errors.
     """
     url = f"{CAMERA_API_URL}/health"
-    response = httpx.get(url, timeout=5)
+    response = httpx.get(url, timeout=5, headers=_auth_headers())
 
     if response.status_code != 200:
         return f"Camera API unreachable: {response.text}"
@@ -83,6 +89,11 @@ def camera_status() -> str:
 
 def main() -> None:
     """Entry point for the MCP server."""
+    if not CAMERA_AUTH_TOKEN:
+        raise SystemExit(
+            "CAMERA_AUTH_TOKEN is not set — the camera API requires a bearer token. "
+            "Set it in the environment or .env file."
+        )
     mcp.run(transport=MCP_TRANSPORT)
 
 

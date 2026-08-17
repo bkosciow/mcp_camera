@@ -22,7 +22,7 @@ Single-container stateless service with three components:
 
 ### 1. Camera Manager (`src/camera_mcp/camera.py`)
 
-Singleton that handles USB camera detection, capture, and auto-reconnection. Scans `/dev/video*` devices first, then falls back to indices 0–5. Configures highest native resolution (1920×1080 → 1280×720 fallback). Discards stale buffered frames before each capture for freshness.
+Singleton that manages multiple USB cameras. Scans `/dev/video*` devices first, then falls back to indices 0–5. Configures highest native resolution (1920×1080 → 1280×720 fallback). Discards stale buffered frames before each capture for freshness. Provides indexed access via `get(i)` and `__getitem__(i)`.
 
 ### 2. HTTP API (`src/camera_mcp/main.py`)
 
@@ -30,18 +30,24 @@ FastAPI application with three endpoints:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/capture` | GET | Capture a fresh JPEG image (resizable via `max_width` query param, 160–3840px) |
-| `/camera` | GET | Camera info and available resolutions |
-| `/health` | GET | Service health, camera connection state, uptime, last error |
+| `/capture` | GET | Capture from first camera (index 0) |
+| `/capture/{cam_index}` | GET | Capture from a specific camera by index |
+| `/camera` | GET | Info for all detected cameras |
+| `/camera/{cam_index}` | GET | Info for a specific camera by index |
+| `/health` | GET | Service health, all camera states, uptime, last error |
+
+All endpoints except `/health` require the header `Authorization: Bearer <CAMERA_AUTH_TOKEN>`.
 
 ### 3. MCP Server (`src/camera_mcp/mcp_server.py`)
 
 Model Context Protocol server exposing two tools for Claude Code:
 
-- **`capture_image(max_width)`** — calls the running `/capture` endpoint, returns the JPEG as an `Image` object
-- **`camera_status()`** — calls `/health`, returns formatted status string
+- **`capture_image(camera_index, max_width)`** — calls `/capture/{cam_index}` (or `/capture` for index 0), returns the JPEG as an `Image` object. `camera_index` is 0-based, defaults to 0.
+- **`camera_status()`** — calls `/health`, returns formatted status string for all detected cameras.
 
 The MCP server connects to the camera API via HTTP (configured via `CAMERA_API_URL` env var, defaults to `http://localhost:8579`). It does NOT import the camera module directly — it's a thin HTTP client over the running API.
+
+It authenticates with the same `CAMERA_AUTH_TOKEN`, sent as an `Authorization` header on every request.
 
 By default the MCP server uses **streamable-http** transport on port 8580, making it accessible from other containers. For local dev with Claude Code subprocess, set `MCP_TRANSPORT=stdio`.
 
@@ -57,6 +63,7 @@ Environment variables are read via `pydantic-settings` with prefix `CAMERA_`:
 | `CAMERA_JPEG_QUALITY` | `85` | JPEG quality (1–100) |
 | `CAMERA_LOG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
 | `CAMERA_API_URL` | `http://localhost:8579` | Camera API URL for MCP server |
+| `CAMERA_AUTH_TOKEN` | *(required)* | Bearer token for API access — app and MCP server refuse to start if unset |
 
 MCP server transport:
 
