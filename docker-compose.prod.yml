@@ -16,6 +16,7 @@ services:
       - CAMERA_AUTH_TOKEN=${CAMERA_AUTH_TOKEN:?CAMERA_AUTH_TOKEN is required}
       - MCP_HOST=0.0.0.0
       - MCP_PORT=11001
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:?MCP_AUTH_TOKEN is required}
     devices:
       - "/dev/video0:/dev/video0"
       - "/dev/video1:/dev/video1"

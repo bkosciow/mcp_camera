@@ -7,10 +7,13 @@ Run with stdio (for local Claude Code subprocess):
     MCP_TRANSPORT=stdio uv run python -m camera_mcp.mcp_server
 """
 
+import hmac
 import os
-from typing import Literal
+from collections.abc import Awaitable, Callable, MutableMapping
+from typing import Any, Literal
 
 import httpx
+import uvicorn
 from mcp.server.fastmcp import FastMCP, Image
 
 # Configuration from environment
@@ -21,6 +24,7 @@ MCP_TRANSPORT: Literal["stdio", "sse", "streamable-http"] = (
 MCP_HOST = os.environ.get("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8580"))
 CAMERA_AUTH_TOKEN = os.environ.get("CAMERA_AUTH_TOKEN", "")
+MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
 
 mcp = FastMCP(
     "Camera MCP",
@@ -33,6 +37,68 @@ mcp = FastMCP(
 def _auth_headers() -> dict[str, str]:
     """Authorization headers for camera API calls."""
     return {"Authorization": f"Bearer {CAMERA_AUTH_TOKEN}"}
+
+
+# --- Inbound auth for network transports ------------------------------------
+
+Scope = MutableMapping[str, Any]
+Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
+Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
+ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
+
+
+def _bearer_token(header: bytes | None) -> bytes | None:
+    """Extract the token from an ``Authorization`` header value.
+
+    Returns the raw token bytes when the header is exactly ``Bearer <token>``
+    (scheme case-insensitive), else None.
+    """
+    if header is None:
+        return None
+    parts = header.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != b"bearer":
+        return None
+    return parts[1]
+
+
+class BearerAuthMiddleware:
+    """Pure-ASGI wrapper requiring ``Authorization: Bearer <token>``.
+
+    Non-http scopes (e.g. lifespan) pass through untouched — they carry no
+    headers to check. Unauthorized requests get a 401 with
+    ``WWW-Authenticate: Bearer`` and never reach the wrapped app.
+    """
+
+    def __init__(self, app: ASGIApp, expected_token: str) -> None:
+        self.app = app
+        self._expected = expected_token.encode("utf-8")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        auth_header: bytes | None = None
+        for name, value in scope["headers"]:
+            if name == b"authorization":
+                auth_header = value
+                break
+        token = _bearer_token(auth_header)
+        if token is not None and hmac.compare_digest(token, self._expected):
+            await self.app(scope, receive, send)
+            return
+        body = b'{"detail": "Invalid or missing token"}'
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"www-authenticate", b"Bearer"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
 
 
 @mcp.tool()
@@ -94,7 +160,22 @@ def main() -> None:
             "CAMERA_AUTH_TOKEN is not set — the camera API requires a bearer token. "
             "Set it in the environment or .env file."
         )
-    mcp.run(transport=MCP_TRANSPORT)
+    if MCP_TRANSPORT == "stdio":
+        mcp.run(transport="stdio")
+        return
+    if not MCP_AUTH_TOKEN:
+        raise SystemExit(
+            "MCP_AUTH_TOKEN is not set — network MCP transports (streamable-http, sse) "
+            "require a bearer token. Set it in the environment or .env file, or use "
+            "MCP_TRANSPORT=stdio for local subprocess use."
+        )
+    if MCP_TRANSPORT == "streamable-http":
+        app: ASGIApp = mcp.streamable_http_app()
+    else:
+        app = mcp.sse_app()
+    wrapped: ASGIApp = BearerAuthMiddleware(app, MCP_AUTH_TOKEN)
+    config = uvicorn.Config(wrapped, host=MCP_HOST, port=MCP_PORT)
+    uvicorn.Server(config).run()
 
 
 if __name__ == "__main__":

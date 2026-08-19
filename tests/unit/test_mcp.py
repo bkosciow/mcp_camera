@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 
@@ -194,3 +195,141 @@ class TestMCPAuth:
         with patch.object(mcp_server, "CAMERA_AUTH_TOKEN", ""):
             with pytest.raises(SystemExit, match="CAMERA_AUTH_TOKEN"):
                 mcp_server.main()
+
+
+async def _echo_app(scope, receive, send):
+    """Trivial ASGI app that echoes a 200 JSON body."""
+    body = b'{"ok": true}'
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", b"14"),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+class TestBearerAuthMiddleware:
+    """The inbound ASGI middleware enforces a bearer token on http requests."""
+
+    def _client(self, mw):
+        return httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=mw), base_url="http://testserver"
+        )
+
+    @pytest.mark.parametrize(
+        ("headers", "expected"),
+        [
+            ({"Authorization": "Bearer right-token"}, 200),
+            ({"Authorization": "BEARER right-token"}, 200),  # scheme is case-insensitive
+            ({}, 401),
+            ({"Authorization": "Bearer wrong-token"}, 401),
+            ({"Authorization": "Basic right-token"}, 401),
+        ],
+    )
+    async def test_http_requests_checked(self, headers, expected):
+        from camera_mcp.mcp_server import BearerAuthMiddleware
+
+        mw = BearerAuthMiddleware(_echo_app, "right-token")
+        async with self._client(mw) as client:
+            response = await client.get("/mcp", headers=headers)
+        assert response.status_code == expected
+
+    async def test_pass_through_returns_inner_response(self):
+        from camera_mcp.mcp_server import BearerAuthMiddleware
+
+        mw = BearerAuthMiddleware(_echo_app, "right-token")
+        async with self._client(mw) as client:
+            response = await client.get("/mcp", headers={"Authorization": "Bearer right-token"})
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+
+    async def test_unauthorized_response_shape(self):
+        from camera_mcp.mcp_server import BearerAuthMiddleware
+
+        mw = BearerAuthMiddleware(_echo_app, "right-token")
+        async with self._client(mw) as client:
+            response = await client.get("/mcp")
+        assert response.json() == {"detail": "Invalid or missing token"}
+        assert response.headers["www-authenticate"] == "Bearer"
+
+    async def test_non_http_scope_bypasses_auth(self):
+        from camera_mcp.mcp_server import BearerAuthMiddleware
+
+        seen = []
+
+        async def recording_app(scope, receive, send):
+            seen.append(scope["type"])
+
+        mw = BearerAuthMiddleware(recording_app, "right-token")
+
+        async def receive():
+            return {"type": "lifespan.startup"}
+
+        async def send(message):
+            pass
+
+        await mw({"type": "lifespan"}, receive, send)
+        assert seen == ["lifespan"]
+
+
+class _FakeUvicornServer:
+    """Records uvicorn.Server construction instead of serving."""
+
+    instances: list["_FakeUvicornServer"] = []
+
+    def __init__(self, config) -> None:
+        self.config = config
+        _FakeUvicornServer.instances.append(self)
+
+    def run(self) -> None:
+        pass
+
+
+class TestMCPStartupAuth:
+    """main() enforces MCP_AUTH_TOKEN for network transports (fail-closed)."""
+
+    def test_streamable_http_without_mcp_token_refuses_to_start(self):
+        from camera_mcp import mcp_server
+
+        with (
+            patch.object(mcp_server, "MCP_TRANSPORT", "streamable-http"),
+            patch.object(mcp_server, "CAMERA_AUTH_TOKEN", "api-token"),
+            patch.object(mcp_server, "MCP_AUTH_TOKEN", ""),
+        ):
+            with pytest.raises(SystemExit, match="MCP_AUTH_TOKEN"):
+                mcp_server.main()
+
+    def test_stdio_without_mcp_token_still_runs(self):
+        from camera_mcp import mcp_server
+
+        runs = []
+        with (
+            patch.object(mcp_server, "MCP_TRANSPORT", "stdio"),
+            patch.object(mcp_server, "CAMERA_AUTH_TOKEN", "api-token"),
+            patch.object(mcp_server, "MCP_AUTH_TOKEN", ""),
+            patch.object(mcp_server.mcp, "run", lambda transport: runs.append(transport)),
+        ):
+            mcp_server.main()
+        assert runs == ["stdio"]
+
+    def test_streamable_http_serves_token_wrapped_app(self):
+        from camera_mcp import mcp_server
+        from camera_mcp.mcp_server import BearerAuthMiddleware
+
+        _FakeUvicornServer.instances = []
+        with (
+            patch.object(mcp_server, "MCP_TRANSPORT", "streamable-http"),
+            patch.object(mcp_server, "CAMERA_AUTH_TOKEN", "api-token"),
+            patch.object(mcp_server, "MCP_AUTH_TOKEN", "mcp-token"),
+            patch.object(mcp_server.uvicorn, "Server", _FakeUvicornServer),
+        ):
+            mcp_server.main()
+
+        assert len(_FakeUvicornServer.instances) == 1
+        config = _FakeUvicornServer.instances[0].config
+        assert isinstance(config.app, BearerAuthMiddleware)

@@ -41,13 +41,14 @@ CAMERA_LOG_LEVEL=INFO
 MCP_PORT=8580
 ```
 
-Generate a token and append it to `.env` — the app refuses to start without it:
+Generate both tokens and append them to `.env` — the app refuses to start without either:
 
 ```bash
 python3 -c 'import secrets; print("CAMERA_AUTH_TOKEN=" + secrets.token_hex(32))' >> .env
+python3 -c 'import secrets; print("MCP_AUTH_TOKEN=" + secrets.token_hex(32))' >> .env
 ```
 
-`docker-compose.prod.yml` passes `CAMERA_AUTH_TOKEN` from `.env` into the container and fails fast if it is missing.
+`docker-compose.prod.yml` passes both from `.env` into the container and fails fast if either is missing.
 
 ### Step 3: Configure Camera Device
 
@@ -108,8 +109,9 @@ make prod-down
 # Camera API health
 curl -f http://localhost:8579/health || echo "UNHEALTHY"
 
-# MCP server check
-curl -f http://localhost:8580/mcp || echo "MCP UNHEALTHY"
+# MCP server check (401 = up and requiring auth; anything else is a problem)
+code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8580/mcp)
+[ "$code" = "401" ] || echo "MCP UNHEALTHY (got $code)"
 
 # Check camera status
 curl -s http://localhost:8579/health | python3 -c "import sys,json; d=json.load(sys.stdin); print('Camera:', d['camera']['connected'])"
@@ -131,10 +133,30 @@ The MCP server listens on port 8580 using the **streamable-http** transport. An 
 http://<camera-host>:8580/mcp
 ```
 
+Every request must carry the MCP bearer token:
+
+```
+Authorization: Bearer <MCP_AUTH_TOKEN>
+```
+
+Claude Code `.mcp.json` example (env interpolation keeps the literal secret out of the file):
+
+```json
+{
+  "mcpServers": {
+    "camera": {
+      "url": "http://<camera-host>:8580/mcp",
+      "headers": { "Authorization": "Bearer ${MCP_AUTH_TOKEN}" }
+    }
+  }
+}
+```
+
 If running both containers in a Docker network, use the service name:
 
 ```python
 # Example: MCP client in another container
+# Must send: Authorization: Bearer <MCP_AUTH_TOKEN>
 mcp_client.connect("http://camera-mcp:8580/mcp")
 ```
 

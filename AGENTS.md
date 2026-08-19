@@ -49,6 +49,19 @@ The MCP server connects to the camera API via HTTP (configured via `CAMERA_API_U
 
 It authenticates with the same `CAMERA_AUTH_TOKEN`, sent as an `Authorization` header on every request.
 
+Inbound requests to the MCP server itself are also protected on network transports: clients must send `Authorization: Bearer <MCP_AUTH_TOKEN>` on every request (no query-parameter fallback), and streamable-http/sse refuse to start without a token. In Claude Code, configure it in `.mcp.json` using env interpolation so no literal secret is committed:
+
+```json
+{
+  "mcpServers": {
+    "camera": {
+      "url": "http://<host>:8580/mcp",
+      "headers": { "Authorization": "Bearer ${MCP_AUTH_TOKEN}" }
+    }
+  }
+}
+```
+
 By default the MCP server uses **streamable-http** transport on port 8580, making it accessible from other containers. For local dev with Claude Code subprocess, set `MCP_TRANSPORT=stdio`.
 
 ## Configuration
@@ -72,6 +85,7 @@ MCP server transport:
 | `MCP_TRANSPORT` | `streamable-http` | Transport (`streamable-http` or `stdio`) |
 | `MCP_HOST` | `0.0.0.0` | MCP server listen address |
 | `MCP_PORT` | `8580` | MCP server listen port |
+| `MCP_AUTH_TOKEN` | *(required for network transports)* | Bearer token MCP clients must send; streamable-http/sse refuse to start if unset (stdio is exempt) |
 
 ## Development Commands
 
