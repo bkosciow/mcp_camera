@@ -8,13 +8,17 @@ Run with stdio (for local Claude Code subprocess):
 """
 
 import hmac
+import logging
 import os
+import time
 from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Any, Literal
 
 import httpx
 import uvicorn
 from mcp.server.fastmcp import FastMCP, Image
+
+logger = logging.getLogger(__name__)
 
 # Configuration from environment
 CAMERA_API_URL = os.environ.get("CAMERA_API_URL", "http://localhost:8579")
@@ -37,6 +41,44 @@ mcp = FastMCP(
 def _auth_headers() -> dict[str, str]:
     """Authorization headers for camera API calls."""
     return {"Authorization": f"Bearer {CAMERA_AUTH_TOKEN}"}
+
+
+def _resolve_location(api_url: str) -> tuple[str, list[str]] | None:
+    """Fetch this deployment's place name(s) from the camera API ``/health``.
+
+    Retries briefly because the API may still be starting in the same container.
+    Returns ``(place_name, places)`` or None if the API never answers.
+    """
+    url = f"{api_url}/health"
+    for attempt in range(5):
+        try:
+            response = httpx.get(url, timeout=2, headers=_auth_headers())
+            if response.status_code == 200:
+                data: dict[str, Any] = response.json()
+                places: list[str] = data.get("places") or []
+                place: str = data.get("place") or (places[0] if places else "unknown")
+                return place, places or [place]
+        except httpx.HTTPError:
+            pass
+        if attempt < 4:
+            time.sleep(1)
+    logger.warning("Could not resolve location from %s — using generic instructions", url)
+    return None
+
+
+def _build_instructions(place: str, places: list[str]) -> str:
+    """Build MCP server instructions naming this deployment's place.
+
+    Clients (e.g. an agent with several camera servers registered) read these
+    at connect time and pick the server marked default when no location is given.
+    """
+    base = f"USB camera snapshot service at location \"{place}\"."
+    if "default" in places:
+        return (
+            f"{base} Names: {', '.join(places)}. This is the DEFAULT camera location — "
+            "use it when the user does not specify a location."
+        )
+    return f"{base} Use it only when the user explicitly asks for the {place} camera."
 
 
 # --- Inbound auth for network transports ------------------------------------
@@ -140,7 +182,13 @@ def camera_status() -> str:
     uptime = data.get("uptime_seconds", 0)
     error = data.get("last_error")
 
-    lines = [f"Cameras: {count} detected"]
+    lines: list[str] = []
+    place = data.get("place")
+    places = data.get("places") or []
+    if place:
+        suffix = " (default)" if "default" in places else ""
+        lines.append(f"Location: {place}{suffix}")
+    lines.append(f"Cameras: {count} detected")
     for cam in cameras:
         status = "ONLINE" if cam["connected"] else "OFFLINE"
         device = cam.get("device", "unknown")
@@ -160,6 +208,13 @@ def main() -> None:
             "CAMERA_AUTH_TOKEN is not set — the camera API requires a bearer token. "
             "Set it in the environment or .env file."
         )
+
+    # Tell clients which location this server serves so an agent with several
+    # camera servers registered picks the default one when no location is given.
+    location = _resolve_location(CAMERA_API_URL)
+    if location is not None:
+        mcp._mcp_server.instructions = _build_instructions(*location)
+
     if MCP_TRANSPORT == "stdio":
         mcp.run(transport="stdio")
         return

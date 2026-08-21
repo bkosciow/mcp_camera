@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "camera": {
+    "camera-home": {
       "command": "/absolute/path/to/camera_mcp/.venv/bin/camera-mcp-mcp",
       "args": [],
       "env": {
@@ -8,6 +8,10 @@
         "CAMERA_API_URL": "http://localhost:8579",
         "CAMERA_AUTH_TOKEN": "REPLACE-WITH-TOKEN-FROM-.ENV"
       }
+    },
+    "camera-office": {
+      "url": "http://office-host:8580/mcp",
+      "headers": { "Authorization": "Bearer ${MCP_AUTH_TOKEN}" }
     }
   }
 }

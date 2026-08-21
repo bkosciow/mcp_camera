@@ -34,7 +34,7 @@ FastAPI application with three endpoints:
 | `/capture/{cam_index}` | GET | Capture from a specific camera by index |
 | `/camera` | GET | Info for all detected cameras |
 | `/camera/{cam_index}` | GET | Info for a specific camera by index |
-| `/health` | GET | Service health, all camera states, uptime, last error |
+| `/health` | GET | Service health, location name(s), all camera states, uptime, last error |
 
 All endpoints except `/health` require the header `Authorization: Bearer <CAMERA_AUTH_TOKEN>`.
 
@@ -43,9 +43,11 @@ All endpoints except `/health` require the header `Authorization: Bearer <CAMERA
 Model Context Protocol server exposing two tools for Claude Code:
 
 - **`capture_image(camera_index, max_width)`** — calls `/capture/{cam_index}` (or `/capture` for index 0), returns the JPEG as an `Image` object. `camera_index` is 0-based, defaults to 0.
-- **`camera_status()`** — calls `/health`, returns formatted status string for all detected cameras.
+- **`camera_status()`** — calls `/health`, returns formatted status string for all detected cameras, including the deployment's location.
 
 The MCP server connects to the camera API via HTTP (configured via `CAMERA_API_URL` env var, defaults to `http://localhost:8579`). It does NOT import the camera module directly — it's a thin HTTP client over the running API.
+
+On startup it reads this deployment's location from `/health` (`place`/`places`, set via `CAMERA_PLACES`) and advertises it in the server instructions, so an agent with several camera servers registered uses the one named `default` when no location is specified.
 
 It authenticates with the same `CAMERA_AUTH_TOKEN`, sent as an `Authorization` header on every request.
 
@@ -75,6 +77,7 @@ Environment variables are read via `pydantic-settings` with prefix `CAMERA_`:
 | `CAMERA_MAX_WIDTH` | `1280` | Default max image width (px) |
 | `CAMERA_JPEG_QUALITY` | `85` | JPEG quality (1–100) |
 | `CAMERA_LOG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
+| `CAMERA_PLACES` | `default` | Comma-separated location names for this deployment, e.g. `default,home`. Reported by `/health`; the name `default` marks the place used when a location is not specified. |
 | `CAMERA_API_URL` | `http://localhost:8579` | Camera API URL for MCP server |
 | `CAMERA_AUTH_TOKEN` | *(required)* | Bearer token for API access — app and MCP server refuse to start if unset |
 

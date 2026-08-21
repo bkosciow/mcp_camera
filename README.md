@@ -75,6 +75,8 @@ curl http://localhost:8579/health
 ```json
 {
   "status": "ok",
+  "place": "home",
+  "places": ["default", "home"],
   "cameras": [
     { "index": 0, "connected": true, "device": "/dev/video0" },
     { "index": 1, "connected": true, "device": "/dev/video1" }
@@ -85,6 +87,8 @@ curl http://localhost:8579/health
 }
 ```
 
+`place` is the display name of this deployment's location, `places` all its aliases (see `CAMERA_PLACES`). A deployment whose names include `default` is the one to use when no location is specified.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -94,6 +98,7 @@ curl http://localhost:8579/health
 | `CAMERA_MAX_WIDTH` | `1280` | Default max image width (px) |
 | `CAMERA_JPEG_QUALITY` | `85` | JPEG quality (1-100) |
 | `CAMERA_LOG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
+| `CAMERA_PLACES` | `default` | Comma-separated location names for this deployment, e.g. `default,home` |
 
 See `.env.example` for all options.
 
@@ -117,7 +122,7 @@ The project includes an MCP server that exposes camera tools to Claude Code. Whe
 ### Available Tools
 
 - **`capture_image(camera_index, max_width)`** — Capture a fresh JPEG image from a USB camera. `camera_index` selects which camera (0-based, defaults to 0).
-- **`camera_status()`** — Check camera health and connection status for all detected cameras.
+- **`camera_status()`** — Check camera health and connection status for all detected cameras. Also reports the deployment's location (e.g. `Location: home (default)`).
 
 ### Setup
 
@@ -134,6 +139,20 @@ The project includes an MCP server that exposes camera tools to Claude Code. Whe
    - "can you see?" → calls `camera_status`
    - "what do you see?" → calls `capture_image()` (first camera)
    - "take a photo with the second camera" → calls `capture_image(camera_index=1)`
+
+### Multiple Locations
+
+Each deployment serves one physical location and names itself with `CAMERA_PLACES` (comma-separated, e.g. `default,home`). The name(s) are reported by `/health`, printed by `camera_status`, and advertised in the MCP server's instructions — so an agent with several camera servers registered can tell them apart.
+
+To add a second location:
+
+1. Clone this repo to the new machine and deploy as usual (Docker or bare metal).
+2. Set its names in `.env`:
+   - `CAMERA_PLACES=office` — or `CAMERA_PLACES=default,home` for the instance that should be the fallback.
+   - Mark **exactly one** deployment with `default`: it is what agents use when you don't name a location.
+3. Connect its MCP server to your agent (another `.mcp.json` entry, or the streamable-http URL in another machine's config).
+
+Then "take a photo" hits the default location, while "what do the office cameras see?" goes to the one named `office`.
 
 ### Standalone
 

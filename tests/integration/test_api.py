@@ -4,6 +4,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from camera_mcp.camera import CameraError
+from camera_mcp.config import Settings
 from camera_mcp.main import create_app
 
 # Must match the value set in tests/conftest.py.
@@ -350,3 +351,21 @@ class TestHealthEndpoint:
             assert len(data["cameras"]) == 1
             first_cam = data["cameras"][0]
             assert first_cam["device"] == 0
+
+    def test_health_place_defaults_to_default(self):
+        app, _ = make_app()
+        with TestClient(app, headers=AUTH_HEADERS) as client:
+            response = client.get("/health")
+            data = response.json()
+            assert data["place"] == "default"
+            assert data["places"] == ["default"]
+
+    def test_health_includes_configured_places(self):
+        settings = Settings(_env_file=None, auth_token="test-token", places="default,home")
+        mock = MockCameraManager(camera_configs=[(0, True, False)])
+        custom_app = create_app(camera=mock, settings=settings)
+        with TestClient(custom_app, headers=AUTH_HEADERS) as client:
+            response = client.get("/health")
+            data = response.json()
+            assert data["place"] == "home"
+            assert data["places"] == ["default", "home"]

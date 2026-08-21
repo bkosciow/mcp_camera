@@ -6,6 +6,16 @@ import httpx
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _restore_mcp_instructions():
+    """Reset FastMCP instructions after each test (main() mutates the module instance)."""
+    from camera_mcp.mcp_server import mcp
+
+    original = mcp._mcp_server.instructions
+    yield
+    mcp._mcp_server.instructions = original
+
+
 class TestMCPServerTools:
     """Verify the MCP server exposes the expected tools."""
 
@@ -152,6 +162,134 @@ class TestCameraStatusTool:
             result = camera_status()
 
         assert "unreachable" in result.lower() or "error" in result.lower()
+
+    def test_status_includes_location_line_for_default_place(self):
+        from camera_mcp.mcp_server import camera_status
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "ok",
+            "place": "home",
+            "places": ["default", "home"],
+            "cameras": [{"index": 0, "connected": True, "device": "/dev/video0"}],
+            "camera_count": 1,
+            "uptime_seconds": 100.0,
+            "last_error": None,
+        }
+
+        with patch("camera_mcp.mcp_server.httpx.get", return_value=mock_response):
+            result = camera_status()
+
+        assert result.startswith("Location: home (default)")
+
+    def test_status_non_default_location_has_no_suffix(self):
+        from camera_mcp.mcp_server import camera_status
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "ok",
+            "place": "office",
+            "places": ["office"],
+            "cameras": [],
+            "camera_count": 0,
+            "uptime_seconds": 1.0,
+            "last_error": None,
+        }
+
+        with patch("camera_mcp.mcp_server.httpx.get", return_value=mock_response):
+            result = camera_status()
+
+        assert result.startswith("Location: office")
+        assert "(default)" not in result.splitlines()[0]
+
+    def test_status_omits_location_when_api_reports_none(self):
+        from camera_mcp.mcp_server import camera_status
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "ok",
+            "cameras": [],
+            "camera_count": 0,
+            "uptime_seconds": 1.0,
+            "last_error": None,
+        }
+
+        with patch("camera_mcp.mcp_server.httpx.get", return_value=mock_response):
+            result = camera_status()
+
+        assert not result.startswith("Location:")
+
+
+class TestBuildInstructions:
+    """_build_instructions names the deployment's place for agents."""
+
+    def test_default_place_marks_it_default(self):
+        from camera_mcp.mcp_server import _build_instructions
+
+        text = _build_instructions("home", ["default", "home"])
+        assert "location \"home\"" in text
+        assert "Names: default, home" in text
+        assert "DEFAULT camera location" in text
+        assert "does not specify a location" in text
+
+    def test_non_default_place_is_exclusive(self):
+        from camera_mcp.mcp_server import _build_instructions
+
+        text = _build_instructions("office", ["office"])
+        assert "location \"office\"" in text
+        assert "explicitly asks for the office camera" in text
+        assert "DEFAULT" not in text
+
+
+class TestResolveLocation:
+    """_resolve_location reads place/places from the API /health endpoint."""
+
+    def test_returns_place_and_places(self):
+        from camera_mcp.mcp_server import _resolve_location
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"place": "home", "places": ["default", "home"]}
+
+        with patch("camera_mcp.mcp_server.httpx.get", return_value=mock_response):
+            assert _resolve_location("http://api") == ("home", ["default", "home"])
+
+    def test_falls_back_to_first_place_name(self):
+        from camera_mcp.mcp_server import _resolve_location
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"places": ["office"]}
+
+        with patch("camera_mcp.mcp_server.httpx.get", return_value=mock_response):
+            assert _resolve_location("http://api") == ("office", ["office"])
+
+    def test_retries_until_healthy(self):
+        from camera_mcp.mcp_server import _resolve_location
+
+        bad = MagicMock()
+        bad.status_code = 503
+        good = MagicMock()
+        good.status_code = 200
+        good.json.return_value = {"place": "home", "places": ["default", "home"]}
+
+        with (
+            patch("camera_mcp.mcp_server.httpx.get", side_effect=[bad, good]),
+            patch("camera_mcp.mcp_server.time.sleep"),
+        ):
+            assert _resolve_location("http://api") == ("home", ["default", "home"])
+
+    def test_returns_none_after_retries(self):
+        from camera_mcp.mcp_server import _resolve_location
+
+        with (
+            patch("camera_mcp.mcp_server.httpx.get", side_effect=httpx.HTTPError("boom")),
+            patch("camera_mcp.mcp_server.time.sleep"),
+        ):
+            assert _resolve_location("http://api") is None
 
 
 class TestMCPAuth:
@@ -300,6 +438,7 @@ class TestMCPStartupAuth:
             patch.object(mcp_server, "MCP_TRANSPORT", "streamable-http"),
             patch.object(mcp_server, "CAMERA_AUTH_TOKEN", "api-token"),
             patch.object(mcp_server, "MCP_AUTH_TOKEN", ""),
+            patch.object(mcp_server, "_resolve_location", return_value=None),
         ):
             with pytest.raises(SystemExit, match="MCP_AUTH_TOKEN"):
                 mcp_server.main()
@@ -312,6 +451,7 @@ class TestMCPStartupAuth:
             patch.object(mcp_server, "MCP_TRANSPORT", "stdio"),
             patch.object(mcp_server, "CAMERA_AUTH_TOKEN", "api-token"),
             patch.object(mcp_server, "MCP_AUTH_TOKEN", ""),
+            patch.object(mcp_server, "_resolve_location", return_value=None),
             patch.object(mcp_server.mcp, "run", lambda transport: runs.append(transport)),
         ):
             mcp_server.main()
@@ -326,6 +466,7 @@ class TestMCPStartupAuth:
             patch.object(mcp_server, "MCP_TRANSPORT", "streamable-http"),
             patch.object(mcp_server, "CAMERA_AUTH_TOKEN", "api-token"),
             patch.object(mcp_server, "MCP_AUTH_TOKEN", "mcp-token"),
+            patch.object(mcp_server, "_resolve_location", return_value=None),
             patch.object(mcp_server.uvicorn, "Server", _FakeUvicornServer),
         ):
             mcp_server.main()
@@ -333,3 +474,43 @@ class TestMCPStartupAuth:
         assert len(_FakeUvicornServer.instances) == 1
         config = _FakeUvicornServer.instances[0].config
         assert isinstance(config.app, BearerAuthMiddleware)
+
+
+class TestMCPStartupLocation:
+    """main() derives MCP instructions from the API's /health place fields."""
+
+    def test_main_sets_instructions_for_default_place(self):
+        from camera_mcp import mcp_server
+
+        _FakeUvicornServer.instances = []
+        with (
+            patch.object(mcp_server, "MCP_TRANSPORT", "streamable-http"),
+            patch.object(mcp_server, "CAMERA_AUTH_TOKEN", "api-token"),
+            patch.object(mcp_server, "MCP_AUTH_TOKEN", "mcp-token"),
+            patch.object(
+                mcp_server, "_resolve_location", return_value=("home", ["default", "home"])
+            ),
+            patch.object(mcp_server.uvicorn, "Server", _FakeUvicornServer),
+        ):
+            mcp_server.main()
+
+        instructions = mcp_server.mcp._mcp_server.instructions
+        assert "home" in instructions
+        assert "DEFAULT camera location" in instructions
+
+    def test_main_keeps_generic_instructions_when_unresolved(self):
+        from camera_mcp import mcp_server
+
+        _FakeUvicornServer.instances = []
+        with (
+            patch.object(mcp_server, "MCP_TRANSPORT", "streamable-http"),
+            patch.object(mcp_server, "CAMERA_AUTH_TOKEN", "api-token"),
+            patch.object(mcp_server, "MCP_AUTH_TOKEN", "mcp-token"),
+            patch.object(mcp_server, "_resolve_location", return_value=None),
+            patch.object(mcp_server.uvicorn, "Server", _FakeUvicornServer),
+        ):
+            mcp_server.main()
+
+        assert mcp_server.mcp._mcp_server.instructions == (
+            "USB camera snapshot service — capture live images and check camera status."
+        )

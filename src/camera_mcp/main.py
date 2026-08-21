@@ -180,6 +180,8 @@ def create_app(camera: CameraManager | None = None, settings: Settings | None = 
         status = "ok" if has_camera else "degraded"
         return {
             "status": status,
+            "place": settings.place_name,
+            "places": settings.places,
             "cameras": cameras_list,
             "camera_count": camera.count,
             "uptime_seconds": round(time.time() - start_time, 1),

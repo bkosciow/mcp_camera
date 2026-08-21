@@ -39,6 +39,9 @@ CAMERA_MAX_WIDTH=1280
 CAMERA_JPEG_QUALITY=85
 CAMERA_LOG_LEVEL=INFO
 MCP_PORT=8580
+# Location name(s) for this deployment; 'default' marks the place used when
+# a location is not specified, e.g. CAMERA_PLACES=default,home or office
+CAMERA_PLACES=default
 ```
 
 Generate both tokens and append them to `.env` — the app refuses to start without either:

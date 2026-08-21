@@ -2,11 +2,14 @@
 
 import logging
 import logging.handlers
+import re
 import sys
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode
+
+PLACE_TOKEN_RE = re.compile(r"^[a-z0-9]+([_-][a-z0-9]+)*$")
 
 
 class Settings(BaseSettings):
@@ -18,8 +21,50 @@ class Settings(BaseSettings):
     jpeg_quality: int = Field(default=85, description="JPEG quality (1-100)")
     log_level: str = Field(default="INFO", description="Log level")
     auth_token: str | None = Field(default=None, description="Bearer token required for API access")
+    # NoDecode: env values are comma-separated strings, not JSON —
+    # _parse_places (below) does the decoding.
+    places: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["default"],
+        description="Location names/aliases for this deployment, e.g. 'default,home'",
+    )
 
     model_config = {"env_prefix": "CAMERA_", "env_file": ".env", "extra": "ignore"}
+
+    @field_validator("places", mode="before")
+    @classmethod
+    def _parse_places(cls, value: object) -> object:
+        """Parse a comma-separated place list (e.g. ``CAMERA_PLACES=default,home``).
+
+        Strips whitespace, drops empty entries, deduplicates (order preserved),
+        and validates each token against ``PLACE_TOKEN_RE``. An empty result
+        falls back to ``["default"]``.
+        """
+        if isinstance(value, str):
+            value = [token.strip() for token in value.split(",") if token.strip()]
+        if not isinstance(value, list) or not all(isinstance(token, str) for token in value):
+            raise ValueError("places must be a comma-separated string or list of strings")
+        parsed: list[str] = []
+        for token in value:
+            if not PLACE_TOKEN_RE.fullmatch(token):
+                raise ValueError(
+                    f"invalid place name {token!r} — use lowercase letters, digits, '-' or '_'"
+                )
+            if token not in parsed:
+                parsed.append(token)
+        return parsed or ["default"]
+
+    @property
+    def place_name(self) -> str:
+        """Display name: first alias other than ``default``, else the first alias."""
+        for place in self.places:
+            if place != "default":
+                return place
+        return self.places[0]
+
+    @property
+    def is_default_place(self) -> bool:
+        """True when this deployment may be used without an explicit location."""
+        return "default" in self.places
 
 
 def get_settings() -> Settings:
